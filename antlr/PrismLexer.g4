@@ -5,7 +5,7 @@
  * Redistribution and use of this script, with or without modification, is
  * permitted provided that the following conditions are met:
  *
- * 1. Redistributions of this script must retain the above copyright
+ *    Redistributions of this script must retain the above copyright
  *    notice, this list of conditions and the following disclaimer.
  *
  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR IMPLIED
