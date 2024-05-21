@@ -41,7 +41,7 @@ After the build is successful, you can start `pprism` from its directory.
 
 ### Pros
 
-- Your model in as few as 1 file (you need not use experiments nor `prism-auto`)
+- Your model in as few as 1 file (you need not to use *experiments*, `prism-auto`, or spread your model across custom scripts)
 - Sound translation to non-parametrized PRISM
 - You can call pprism instead of prism transparently
 
