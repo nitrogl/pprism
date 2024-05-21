@@ -1,0 +1,271 @@
+#!/bin/python
+# 
+# Parametrised PRISM
+#
+# TODO:
+#  - Hide "ANTLR warnings"
+#  - Indicise sub-models with hash functions to avoid re-running prism on the same parameters
+#  - Parallel execution of PRISM to run
+#  - Interpret prism parsing error back to the pprism file
+#  - Support nested parameters
+#  - Detect nested parameters, show an error and quit
+#  - Smart renaming of pprism local variables in modules
+#  - Capture standard error too
+#
+# Change log:
+#  - Decide if the file needs only 1 model to run (1-parameter pprism or prism native file)
+#  - Determine if pprism or prism native file
+#  - Detect and warn about missing prism executable
+#  - Hide "Picked up _JAVA_OPTIONS"
+#  - Output with replacement of strings
+#  - Output with on-the-fly replacement of strings
+#  - Show pprism parsing errors
+#
+#
+
+import os
+import re
+import shutil
+import subprocess
+import sys
+import copy
+import tempfile
+
+from antlr4 import *
+from antlr.PrismLexer           import PrismLexer
+from antlr.PrismParser          import PrismParser
+from antlr.PrismParserListener  import PrismParserListener
+from antlr.PPrismLexer          import PPrismLexer
+from antlr.PPrismParser         import PPrismParser
+from antlr.PPrismParserListener import PPrismParserListener
+# ---------------------------------------------------------    
+
+# Metadata information
+PPRISM_VERSION = "0.4"
+PROGRAM_NAME = os.path.basename(__file__)
+# ---------------------------------------------------------
+
+class Parameter:
+  def __init__(self, lines, streamInterval, pre, post, values):
+    self.lines = lines
+    self.streamInterval = streamInterval
+    self.pre = pre
+    self.post = post
+    self.values = values
+  def __str__(self):
+    if self.lines[0] == self.lines[1]:
+      lines = f"line {self.lines[0]}"
+    else:
+      lines = f"lines {self.lines[0]}-{self.lines[1]}"
+    return f"{lines} -> {self.pre} {self.values} {self.post}"
+# ---------------------------------------------------------
+
+class StochasticScript:
+  def __init__(self, filePath, argumentIndex, parameters = None):
+    self.filePath = filePath
+    self.argumentIndex = argumentIndex
+    self.parameters = parameters
+  
+  def isPrismFile(self):
+    return self.parameters is None
+# ---------------------------------------------------------
+
+# Configure PPRISM parser
+class PPrismPrintListener(PPrismParserListener):
+  def __init__(self):
+    self.parameters = []
+    
+  def enterParamDeclaration(self, ctx: ParserRuleContext):
+    charStream = ctx.start.getInputStream()
+    #charStream = ctx.stop.getInputStream() # the input stream is the same
+    line = charStream.getText(ctx.start.start, ctx.stop.stop)
+    
+    # Manually parse parameter
+    matches = re.match(r'(.*?=\s*{)(.*?)(};)', line)
+    if matches:
+      prefix = matches.group(1)
+      elements = matches.group(2).split(',')
+      suffix = matches.group(3)
+      self.parameters.append(Parameter([ctx.start.line, ctx.stop.line], [ctx.start.start, ctx.stop.stop], prefix, suffix, elements))
+    
+    return None
+# ---------------------------------------------------------
+
+class Grammar:
+  def __init__(self, lexer, parser):
+    self.lexer = lexer
+    self.parser = parser
+    self.silentParser = copy.deepcopy(parser)
+    #self.silentParser.removeErrorListeners() # Can't do here? why?
+
+  def parse(self, filePath, silent = False):
+    inputStream = FileStream(filePath)
+    l = self.lexer(inputStream)
+    tokenStream = CommonTokenStream(l)
+    tokenStream.fill()
+    if silent:
+      p = self.silentParser(tokenStream)
+      p.removeErrorListeners()
+    else:
+      p = self.parser(tokenStream)
+
+    tree = p.prismModel()
+    nerrors = p.getNumberOfSyntaxErrors()
+    
+    if nerrors > 0:
+      return nerrors
+    else:
+      return tree
+# ---------------------------------------------------------
+# ---------------------------------------------------------  
+
+# Check if the command exists in the system's PATH
+def checkCommand(command: str, exit=False):
+  if shutil.which(command) is None:
+    msg = f"{PROGRAM_NAME}: '{command}' not found.";
+    if exit:
+      sys.exit(msg)
+    else:
+      print(msg)
+# ---------------------------------------------------------    
+
+def runNativePRISM(arguments):
+  try:
+    process = subprocess.Popen(['prism'] + arguments, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+
+    #process = subprocess.run('prism ' + ' '.join(arguments),  shell=True, capture_output=True, text=True)
+
+    # Substitutions in standard error # BUG: IT does not work, how to do that?
+    standardError = ""
+    #for line in iter(process.stderr.readline, ""):
+      #line = re.sub(r'^.*_JAVA_OPTIONS.*$\n?', '', line)
+      ##print(line, end='', file=sys.stderr)
+      #standardError += line
+      #yield line
+    #process.stderr.close()
+    
+    # Substitution in standard output
+    standardOutput = ""
+    for line in iter(process.stdout.readline, ""):
+      # Embedded PRISM
+      line = re.sub(r'PRISM', 'ParametrisedPRISM', line)
+      line = re.sub(r'=====', '=================\n(PRISM is run in the backend transparently)', line)
+      line = re.sub(r'Version', f'Version: {PPRISM_VERSION}\nPRISM Version', line)
+      line = re.sub(r'prism ', 'pprism ', line)
+      #print(line, end='', file=sys.stdout)
+      #standardOutput += line
+      yield line
+      
+    process.stdout.close()
+    process.wait()
+    return "" + standardError + standardOutput
+
+  except subprocess.CalledProcessError as e:
+    # Handle any errors that occur during command execution
+    print(f"Error: {e}")
+    return ""
+# ---------------------------------------------------------
+
+def runPPRISM(arguments, script: StochasticScript, skipParameters = 0):
+  if script.isPrismFile():
+    return runNativePRISM(arguments)
+  
+  # Original PPRISM file
+  inputStream = open(arguments[script.argumentIndex], 'rb')
+  pprismScriptContent = inputStream.read()
+  
+  result = ""
+  skipped = 0
+  for parameter in sorted(script.parameters, key=lambda p: p.streamInterval[0], reverse=True): # sorted by last
+    if skipped < skipParameters:
+      skipped += 1
+      continue
+    for value in parameter.values:
+      if skipParameters == len(script.parameters) - 1:
+        suffix = ".prism"
+      else:
+        suffix = ".pprism"
+      with tempfile.NamedTemporaryFile(mode='wb', delete=False, prefix="pprism_", suffix=suffix) as tmpFile:
+        tmpContent  = pprismScriptContent[0:parameter.streamInterval[0]]
+        tmpContent += parameter.pre[:-1].encode()
+        tmpContent += value.encode()
+        tmpContent += parameter.post[1:].encode()
+        tmpContent += pprismScriptContent[parameter.streamInterval[1] + 1:]
+        tmpFile.write(tmpContent)
+        arguments[script.argumentIndex] = tmpFile.name
+        if skipParameters == len(script.parameters) - 1:
+          msg = f"\n\n ==== Running PRISM on {tmpFile.name}\n"
+          print(msg)
+          result += msg
+          # To print out at the same time of capturing
+          for line in runNativePRISM(arguments):
+            result += line
+            print(line, end="")
+        else:
+          result += runPPRISM(arguments, script, skipParameters + 1)
+  return result
+# ---------------------------------------------------------
+
+def checkScript(strings):
+  # Grammars
+  prismGrammar = Grammar(PrismLexer, PrismParser)
+  pprismGrammar = Grammar(PPrismLexer, PPrismParser)
+  pprismParserListener = PPrismPrintListener()
+
+  # Get scripts
+  for index, string in enumerate(strings):
+    if os.path.isfile(string) and os.access(string, os.R_OK):
+      # File exists and is readable
+      tree = prismGrammar.parse(string, True)
+      if isinstance(tree, int):
+        # The file is not a valid PRISM file, as an error code is returned
+        # Try to parse it as a PPRISM
+        tree = pprismGrammar.parse(string, True)
+        if not isinstance(tree, int):
+          # It is a PPRISM file but not a PRISM file
+          
+          # Extract parameters
+          walker = ParseTreeWalker()
+          walker.walk(pprismParserListener, tree)
+          
+          return StochasticScript(string, index, pprismParserListener.parameters)
+        else:
+          # Not a valid PPRISM and not a valid PRISM either
+          pprismGrammar.parse(string, False)
+      else:
+        # It is a prism file
+        return StochasticScript(string, index)
+    else:
+        # File does not exist or is not readable, continue to the next iteration
+        continue
+  return None
+# ---------------------------------------------------------
+
+#def pprism2prisms(scripts)
+# ---------------------------------------------------------
+
+# Check if PRISM is around
+checkCommand("prism", exit=True)
+
+# Result
+output = None
+
+# Generate PRISM scripts
+script = checkScript(sys.argv[1:])
+
+if script is not None:
+  # If we have exactly one script, we just process it, otherwise, we run PRISM to return its error codes
+  if script.isPrismFile():
+    # Run model checker
+    output = runNativePRISM(sys.argv[1:])
+  else:
+    output = runPPRISM(sys.argv[1:], script)
+else:
+  # Some error here? we run PRISM to return its error codes
+  output = runNativePRISM(sys.argv[1:])
+# ---------------------------------------------------------    
+# ---------------------------------------------------------    
+
+# 
+# Copyright (C) 2024  Roberto Metere, York, UK
+# All rights reserved.
