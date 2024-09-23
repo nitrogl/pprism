@@ -4,6 +4,10 @@ Parametrized PRISM
 ---
 `pprism` is a small project that provides a sound extension to the language of [PRISM model-checker](https://www.prismmodelchecker.org/) to allow for in-language parametrized constant.
 
+If you use `pprism`, cite it as
+
+Roberto Metere, Ricardo M. Czekster, Luca Arnaboldi. [Enhancing Expressiveness in Stochastic Modelling of Cyber-Physical Systems](doi). 13th Mediterranean Conference on Embedded Computing. IEEE 2024.
+
 
 ## Build
 

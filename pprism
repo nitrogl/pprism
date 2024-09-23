@@ -129,7 +129,7 @@ def checkCommand(command: str, exit=False):
       print(msg)
 # ---------------------------------------------------------    
 
-def runNativePRISM(arguments):
+def runNativePRISM(arguments = []):
   try:
     process = subprocess.Popen(['prism'] + arguments, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
 
@@ -137,27 +137,27 @@ def runNativePRISM(arguments):
 
     # Substitutions in standard error # BUG: IT does not work, how to do that?
     standardError = ""
-    #for line in iter(process.stderr.readline, ""):
-      #line = re.sub(r'^.*_JAVA_OPTIONS.*$\n?', '', line)
-      ##print(line, end='', file=sys.stderr)
-      #standardError += line
-      #yield line
-    #process.stderr.close()
+    for line in iter(process.stderr.readline, ""):
+      line = re.sub(r'^.*_JAVA_OPTIONS.*$\n?', '', line)
+      #print(line, end='', file=sys.stderr)
+      standardError += line
+      yield line
+    process.stderr.close()
     
     # Substitution in standard output
     standardOutput = ""
     for line in iter(process.stdout.readline, ""):
-      # Embedded PRISM
+      ## Embedded PRISM
       line = re.sub(r'PRISM', 'ParametrisedPRISM', line)
       line = re.sub(r'=====', '=================\n(PRISM is run in the backend transparently)', line)
       line = re.sub(r'Version', f'Version: {PPRISM_VERSION}\nPRISM Version', line)
       line = re.sub(r'prism ', 'pprism ', line)
       #print(line, end='', file=sys.stdout)
-      #standardOutput += line
+      standardOutput += line
       yield line
       
-    process.stdout.close()
-    process.wait()
+    #process.stdout.close()
+    #process.wait()
     return "" + standardError + standardOutput
 
   except subprocess.CalledProcessError as e:
@@ -197,10 +197,10 @@ def runPPRISM(arguments, script: StochasticScript, skipParameters = 0):
           msg = f"\n\n ==== Running PRISM on {tmpFile.name}\n"
           print(msg)
           result += msg
-          # To print out at the same time of capturing
+          # To print out the captured result
           for line in runNativePRISM(arguments):
             result += line
-            print(line, end="")
+            print(line, end="", flush=True)
         else:
           result += runPPRISM(arguments, script, skipParameters + 1)
   return result
@@ -263,8 +263,9 @@ if script is not None:
 else:
   # Some error here? we run PRISM to return its error codes
   output = runNativePRISM(sys.argv[1:])
-# ---------------------------------------------------------    
-# ---------------------------------------------------------    
+  print(*output, sep='')
+# ---------------------------------------------------------
+# ---------------------------------------------------------
 
 # 
 # Copyright (C) 2024  Roberto Metere, York, UK
